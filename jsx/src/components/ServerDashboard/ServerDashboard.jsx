@@ -479,6 +479,15 @@ const ServerDashboard = (props) => {
                   testid="user-sort"
                 />
               </th>
+              <th id="name-header">
+                Name{" "}
+                <SortHandler
+                  currentSort={sort}
+                  setSort={setSort}
+                  sortKey="name"
+                  testid="name-sort"
+                />
+              </th>
               <th id="admin-header">Admin</th>
               <th id="server-header">Server</th>
               <th id="last-activity-header">
