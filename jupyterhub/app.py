@@ -376,6 +376,25 @@ class JupyterHub(Application):
         """,
     ).tag(config=True)
 
+    load_firstNames = List(
+        Dict(),
+        help="""List of predefined firstName dictionaries to load at startup.
+
+            For instance::
+
+                load_firstNames = [
+                                {
+                                    'name': 'teacher',
+                                    'users': ['cyclops', 'gandalf']
+                                }
+                            ]
+
+            All keys apart from 'name' are optional.
+            See all the available scopes in the JupyterHub REST API documentation.
+
+            """,
+    ).tag(config=True)
+
     config_file = Unicode('jupyterhub_config.py', help="The config file to load").tag(
         config=True
     )
@@ -2595,6 +2614,229 @@ class JupyterHub(Application):
             for kind in kinds:
                 roles.check_for_default_roles(db, kind)
 
+    async def init_firstName_creation(self):
+        """Load user-defined firstNames into the database"""
+
+        firstNames_to_load = self.load_firstNames[:]
+
+        if self.authenticator.manage_firstNames and self.load_firstNames:
+            offending_firstNames = []
+            for firstName_spec in firstNames_to_load:
+                user_firstName_assignments = firstName_spec.get('users', [])
+                if user_firstName_assignments:
+                    offending_firstNames.append(firstName_spec)
+            if offending_firstNames:
+                raise ValueError(
+                    "When authenticator manages firstNames, `load_firstNames` can not"
+                    " be used for assigning firstNames to users."
+                    f" Offending firstNames: {offending_firstNames}"
+                )
+
+        if self.authenticator.manage_firstNames:
+            managed_firstNames = await self.authenticator.load_managed_firstNames()
+            for firstName in managed_firstNames:
+                firstName['managed_by_auth'] = True
+            firstNames_to_load.extend(managed_firstNames)
+
+        self.log.debug('Loading firstNames into database')
+        default_firstNames = firstNames.get_default_firstNames()
+        config_firstName_names = [r['name'] for r in firstNames_to_load]
+
+        init_firstNames = []
+        firstNames_with_new_permissions = []
+        for firstName_spec in firstNames_to_load:
+            firstName_name = firstName_spec['name']
+            self.log.debug("Loading firstName %s", firstName_name)
+
+            # Check for duplicates
+            if config_firstName_names.count(firstName_name) > 1:
+                raise ValueError(
+                    f"FirstName {firstName_name} multiply defined. Please check the `load_firstNames` configuration"
+                )
+            init_firstNames.append(firstName_spec)
+            # Check if some firstNames have obtained new permissions (to avoid 'scope creep')
+            old_firstName = orm.FirstName.find(self.db, name=firstName_name)
+            if old_firstName:
+                if not set(firstName_spec.get('scopes', [])).issubset(old_firstName.scopes):
+                    self.log.warning(f"FirstName {firstName_name} has obtained extra permissions")
+                    firstNames_with_new_permissions.append(firstName_name)
+
+        if (
+            self.db.query(orm.FirstName).first() is None
+            and self.db.query(orm.User).first() is not None
+        ):
+            # apply rbac-upgrade default firstName assignment if there are users in the db,
+            # but not any firstNames
+            self._rbac_upgrade = True
+        else:
+            self._rbac_upgrade = False
+
+        init_non_managed_firstName_names = [
+            r['name'] for r in init_firstNames if not r.get('managed_by_auth', False)
+        ]
+        init_managed_firstName_names = [
+            r['name'] for r in init_firstNames if r.get('managed_by_auth', False)
+        ]
+
+        # delete all firstNames that were defined by `load_firstNames()` config but are not longer there
+        for firstName in self.db.query(orm.FirstName).filter(
+            (orm.FirstName.managed_by_auth == False)
+            & orm.FirstName.name.notin_(init_non_managed_firstName_names)
+        ):
+            self.log.warning(f"Deleting firstName {firstName.name}")
+            self.db.delete(firstName)
+
+        # delete all firstNames that were defined by authenticator but are not in `load_managed_firstNames()`
+        if self.authenticator.reset_managed_firstNames_on_startup:
+            deleted_stale_firstNames = (
+                self.db.query(orm.FirstName)
+                .filter(
+                    (orm.FirstName.managed_by_auth == True)
+                    & (orm.FirstName.name.notin_(init_managed_firstName_names))
+                )
+                .delete()
+            )
+            if deleted_stale_firstNames:
+                self.log.info(
+                    "Deleted %s stale firstNames previously added by an authenticator",
+                    deleted_stale_firstNames,
+                )
+
+        for firstName in init_firstNames:
+            firstNames.create_firstName(self.db, firstName, commit=False)
+
+        self.db.commit()
+
+    async def init_firstName_assignment(self):
+        # tokens are added separately
+        kinds = ['users']
+        admin_firstName_objects = ['users', 'services']
+        config_admin_users = set(self.authenticator.admin_users)
+        db = self.db
+        # start by marking all firstName firstName assignments from authenticator as stale
+        stale_managed_firstName_assignment = {}
+        if self.authenticator.reset_managed_firstNames_on_startup:
+            for kind in kinds:
+                entity_name = kind[:-1]
+                association_class = orm._firstName_associations[entity_name]
+                stale_managed_firstName_assignment[kind] = set(
+                    db.query(association_class)
+                    .filter(association_class.managed_by_auth == True)
+                    .all()
+                )
+
+        firstNames_to_load_assignments_from = self.load_firstNames[:]
+
+        if self.authenticator.manage_firstNames:
+            managed_firstNames = await self.authenticator.load_managed_firstNames()
+            for firstName in managed_firstNames:
+                firstName['managed_by_auth'] = True
+            firstNames_to_load_assignments_from.extend(managed_firstNames)
+
+        # load predefined firstNames from config file
+        if config_admin_users:
+            for firstName_spec in firstNames_to_load_assignments_from:
+                if firstName_spec['name'] == 'admin':
+                    self.log.warning(
+                        "Configuration specifies both admin_users and users in the admin firstName specification. "
+                        "If admin firstName is present in config, c.Authenticator.admin_users should not be used."
+                    )
+                    self.log.info(
+                        "Merging admin_users set with users list in admin firstName"
+                    )
+                    firstName_spec['users'] = set(firstName_spec.get('users', []))
+                    firstName_spec['users'] |= config_admin_users
+        self.log.debug('Loading firstName assignments from config')
+        has_admin_firstName_spec = {firstName_bearer: False for firstName_bearer in admin_firstName_objects}
+
+        for firstName_spec in firstNames_to_load_assignments_from:
+            firstName = orm.FirstName.find(db, name=firstName_spec['name'])
+            firstName_name = firstName_spec["name"]
+            if firstName_name == 'admin':
+                for kind in admin_firstName_objects:
+                    has_admin_firstName_spec[kind] = kind in firstName_spec
+                    if has_admin_firstName_spec[kind]:
+                        self.log.info(f"Admin firstName specifies static {kind} list")
+                    else:
+                        self.log.info(
+                            f"Admin firstName does not specify {kind}, preserving admin membership in database"
+                        )
+            # add users, services, and/or groups,
+            # tokens need to be checked for permissions
+            for kind in kinds:
+                orm_firstName_bearers = []
+                if kind in firstName_spec:
+                    for name in firstName_spec[kind]:
+                        if kind == 'users':
+                            name = self.authenticator.normalize_username(name)
+                        Class = orm.get_class(kind)
+                        orm_obj = Class.find(db, name)
+                        if orm_obj is not None:
+                            orm_firstName_bearers.append(orm_obj)
+                        else:
+                            if kind == 'users':
+                                orm_obj = await self._get_or_create_user(
+                                    name, hint=f"firstName: {firstName_name}"
+                                )
+                                orm_firstName_bearers.append(orm_obj)
+                            else:
+                                # this can't happen now, but keep the `else` in case we introduce a problem
+                                # in the declaration of `kinds` above
+                                raise ValueError(f"Unhandled firstName member kind: {kind}")
+
+                    # explicitly defined list
+                    # ensure membership list is exact match (adds and revokes permissions)
+                    setattr(firstName, kind, orm_firstName_bearers)
+                    # if the firstName_spec was contributed by the authenticator, mark the newly
+                    # created assignments as managed by authenticator too; also mark the
+                    # assignment as not stale (in case if it was marked as such initially)
+                    if firstName_spec.get('managed_by_auth', False):
+                        entity_name = kind[:-1]
+                        association_class = orm._firstName_associations[entity_name]
+                        kind_id = getattr(association_class, f'{entity_name}_id')
+                        associations = db.query(association_class).filter(
+                            kind_id.in_([bearer.id for bearer in orm_firstName_bearers])
+                            & (association_class.firstName_id == firstName.id)
+                        )
+                        for association in associations:
+                            association.managed_by_auth = True
+                            # this association is not stale
+                            if association in stale_managed_firstName_assignment[kind]:
+                                stale_managed_firstName_assignment[kind].remove(association)
+                else:
+                    # no defined members in `load_managed_firstNames()`
+                    # leaving 'users' undefined should not remove existing managed firstName assignments
+                    if kind == "users" and firstName_spec.get('managed_by_auth', False):
+                        entity_name = kind[:-1]
+                        association_class = orm._firstName_associations[entity_name]
+                        kind_id = getattr(association_class, f'{entity_name}_id')
+                        associations = db.query(association_class).filter(
+                            association_class.firstName_id == firstName.id
+                        )
+                        for association in associations:
+                            if association in stale_managed_firstName_assignment[kind]:
+                                stale_managed_firstName_assignment[kind].remove(association)
+                    # no defined members in `load_firstNames()`
+                    # leaving 'users' undefined in overrides of the default 'user' firstName
+                    # should not clear membership on startup
+                    # since allowed users could be managed by the authenticator
+                    else:
+                        # otherwise, omitting a member category is equivalent to specifying an empty list
+                        setattr(firstName, kind, [])
+
+        if self.authenticator.reset_managed_firstNames_on_startup:
+            for kind, stale_assignments in stale_managed_firstName_assignment.items():
+                if stale_assignments:
+                    for assignment in stale_assignments:
+                        self.db.delete(assignment)
+                    self.log.info(
+                        "Deleted %s stale %s firstName assignments previously added by an authenticator",
+                        len(stale_assignments),
+                        kind[:-1],
+                    )
+
+        db.commit()
+
     async def _add_tokens(self, token_dict, kind):
         """Add tokens for users or services to the database"""
         if kind == 'user':
@@ -3351,11 +3593,13 @@ class JupyterHub(Application):
         self.init_proxy()
         self.init_oauth()
         await self.init_role_creation()
+        await self.init_firstName_creation()
         await self.init_users()
         await self.init_groups()
         self.init_services()
         await self.init_api_tokens()
         await self.init_role_assignment()
+        await self.init_firstName_assignment()
         self.init_tornado_settings()
         self.init_handlers()
         self.init_tornado_application()

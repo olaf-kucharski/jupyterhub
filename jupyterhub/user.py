@@ -11,7 +11,7 @@ from tornado import gen, web
 from tornado.httputil import urlencode
 from tornado.log import app_log
 
-from . import orm, roles, scopes
+from . import orm, roles, scopes, firstNames
 from ._version import __version__, _check_version
 from .crypto import CryptKeeper, EncryptionUnavailable, InvalidToken, decrypt, encrypt
 from .metrics import RUNNING_SERVERS, TOTAL_USERS
@@ -400,6 +400,107 @@ class User:
                 self.db.delete(stripped_role)
 
         self.db.commit()
+
+    def sync_firstNames(self, auth_firstNames):
+        """Synchronize firstNames with database"""
+        auth_firstNames_by_name = {firstName['name']: firstName for firstName in auth_firstNames}
+
+        current_user_firstNames = {r.name for r in self.orm_user.firstNames}
+        new_user_firstNames = set(auth_firstNames_by_name.keys())
+
+        granted_firstNames = new_user_firstNames.difference(current_user_firstNames)
+        stripped_firstNames = current_user_firstNames.difference(new_user_firstNames)
+
+        if granted_firstNames:
+            self.log.info(f"Granting user {self.name} firstNames(s): {granted_firstNames}")
+        if stripped_firstNames:
+            self.log.info(f"Stripping user {self.name} firstNames(s): {stripped_firstNames}")
+
+        existing_granted_firstNames = {
+            r.name
+            for r in self.db.query(orm.FirstName).filter(orm.FirstName.name.in_(granted_firstNames))
+        }
+        created_firstNames = existing_granted_firstNames.difference(granted_firstNames)
+
+        if created_firstNames:
+            self.log.info(f"Creating new firstNames {created_firstNames} in the database")
+
+        for firstName_name in new_user_firstNames:
+            if firstName_name in created_firstNames:
+                self.log.info(f"Creating new firstName {firstName_name}")
+            else:
+                self.log.debug(f"Updating existing firstName {firstName_name}")
+
+            firstName = auth_firstNames_by_name[firstName_name]
+            firstName['managed_by_auth'] = True
+
+            # creates firstName, or if it exists, update its `description` and `scopes`
+            try:
+                orm_firstName = firstNames.create_firstName(
+                    self.db, firstName, commit=False, reset_to_defaults=False
+                )
+            except (
+                firstNames.FirstNameValueError,
+                firstNames.InvalidNameError,
+                # scopes.ScopeNotFound,
+            ) as e:
+                raise web.HTTPError(409, str(e))
+
+            # Update the users for the firstName
+            entity_map = {
+                # 'groups': orm.Group,
+                # 'services': orm.Service,
+                'users': orm.User,
+            }
+            for key, Class in entity_map.items():
+                if key in firstName.keys():
+                    entities = []
+                    not_found_entities = []
+                    for entity_name in firstName[key]:
+                        entity = Class.find(self.db, entity_name)
+                        if entity is None:
+                            not_found_entities.append(entity_name)
+                        else:
+                            entities.append(entity)
+                    setattr(orm_firstName, key, entities)
+                    if not_found_entities:
+                        self.log.warning(
+                            f'Could not assign the firstName {firstName_name} to {key}:'
+                            f' {not_found_entities} not found in the database.'
+                        )
+
+        # assign the granted firstNames to the current user
+        for firstName_name in granted_firstNames:
+            firstNames.grant_firstName(
+                self.db,
+                entity=self.orm_user,
+                firstNamename=firstName_name,
+                commit=False,
+                managed=True,
+            )
+
+        # strip the user of firstNames no longer directly granted
+        for firstName_name in stripped_firstNames:
+            firstNames.strip_firstName(
+                self.db, entity=self.orm_user, firstNamename=firstName_name, commit=False
+            )
+        managed_stripped_firstNames = (
+            self.db.query(orm.FirstName)
+            .filter(
+                orm.FirstName.name.in_(stripped_firstNames) & (orm.FirstName.managed_by_auth == True)
+            )
+            .all()
+        )
+        for stripped_firstName in managed_stripped_firstNames:
+            if (
+                not stripped_firstName.users
+                and not stripped_firstName.services
+                and not stripped_firstName.groups
+            ):
+                self.db.delete(stripped_firstName)
+
+        self.db.commit()
+
 
     async def save_auth_state(self, auth_state):
         """Encrypt and store auth_state"""

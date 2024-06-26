@@ -218,6 +218,55 @@ class Role(Base):
         """
         return db.query(cls).filter(cls.name == name).first()
 
+_firstName_associations = {}
+
+for entity in (
+    'user',
+):
+    table = Table(
+        f'{entity}_firstName_map',
+        Base.metadata,
+        Column(
+            f'{entity}_id',
+            ForeignKey(f'{entity}s.id', ondelete='CASCADE'),
+            primary_key=True,
+        ),
+        Column(
+            'firstName_id',
+            ForeignKey('firstNames.id', ondelete='CASCADE'),
+            primary_key=True,
+        ),
+        Column('managed_by_auth', Boolean, default=False, nullable=False),
+    )
+
+    _firstName_associations[entity] = type(
+        entity.title() + 'FirstNameMap', (Base,), {'__table__': table}
+    )
+
+
+class FirstName(Base):
+    """User FirstNames"""
+
+    __tablename__ = 'firstNames'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Unicode(255), unique=True)
+    description = Column(Unicode(1023))
+    scopes = Column(JSONList, default=[])
+
+    users = relationship('User', secondary='user_firstName_map', back_populates='firstNames')
+
+    managed_by_auth = Column(Boolean, default=False, nullable=False)
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.name} ({self.description}) - scopes: {self.scopes}>"
+
+    @classmethod
+    def find(cls, db, name):
+        """Find a firstName by name.
+        Returns None if not found.
+        """
+        return db.query(cls).filter(cls.name == name).first()
+
 
 # user:group many:many mapping table
 user_group_map = Table(
@@ -291,6 +340,13 @@ class User(Base):
     roles = relationship(
         'Role',
         secondary='user_role_map',
+        back_populates='users',
+        lazy="selectin",
+    )
+
+    firstNames = relationship(
+        'FirstName',
+        secondary='user_firstName_map',
         back_populates='users',
         lazy="selectin",
     )

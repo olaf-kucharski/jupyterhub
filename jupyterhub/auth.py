@@ -830,6 +830,27 @@ class Authenticator(LoggingConfigurable):
             )
         return []
 
+    # Checks the configuration and whether you have the permissions
+    async def load_managed_firstNames(self):
+        """Load firstNames managed by authenticator.
+
+        Returns a list of predefined firstName dictionaries to load at startup,
+        following the same format as `JupyterHub.load_firstNames`.
+
+        .. versionadded:: 5.0
+        """
+        if not self.manage_firstNames:
+            raise ValueError(
+                'Managed firstNames can only be loaded when `manage_firstNames` is True'
+            )
+        if self.reset_managed_firstNames_on_startup:
+            raise NotImplementedError(
+                "When `reset_managed_firstNames_on_startup` is used, the `load_managed_firstNames()`"
+                " method must have a non-default implementation, because using the default"
+                " implementation would remove all managed firstNames and firstName assignments."
+            )
+        return []
+
     def pre_spawn_start(self, user, spawner):
         """Hook called before spawning a user's server
 
@@ -936,6 +957,47 @@ class Authenticator(LoggingConfigurable):
 
         .. versionadded:: 5.0
         """,
+    )
+    manage_firstNames = Bool(
+        False,
+        config=True,
+        help="""Let authenticator manage firstNames
+
+            If True, Authenticator.authenticate and/or .refresh_user
+            may return a list of firstNames in the 'firstNames' field,
+            which will be added to the database.
+
+            When enabled, all firstName management will be handled by the
+            authenticator; in particular, assignment of firstNames via
+            `JupyterHub.load_firstNames` traitlet will not be possible.
+
+            .. versionadded:: 5.0
+            """,
+    )
+    reset_managed_firstNames_on_startup = Bool(
+        False,
+        config=True,
+        help="""Reset managed firstNames to result of `load_managed_firstNames()` on startup.
+
+            If True:
+              - stale managed firstNames will be removed,
+              - stale assignments to managed firstNames will be removed.
+
+            Any firstName not present in `load_managed_firstNames()` will be considered 'stale'.
+
+            The 'stale' status for firstName assignments is also determined from `load_managed_firstNames()` result:
+
+            - user firstName assignments status will depend on whether the `users` key is defined or not:
+
+              * if a list is defined under the `users` key and the user is not listed, then the user firstName assignment will be considered 'stale',
+              * if the `users` key is not provided, the user firstName assignment will be preserved;
+            - service and group firstName assignments will be considered 'stale':
+
+              * if not included in the `services` and `groups` list,
+              * if the `services` and `groups` keys are not provided.
+
+            .. versionadded:: 5.0
+            """,
     )
     auto_login = Bool(
         False,
