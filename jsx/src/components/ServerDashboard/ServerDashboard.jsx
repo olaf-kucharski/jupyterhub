@@ -511,6 +511,7 @@ const ServerDashboard = (props) => {
                   </Button>
                 </Link>
               </td>
+              <td></td>
               <td colSpan={4} className="admin-header-buttons">
                 {/* Start all servers */}
                 <Button
