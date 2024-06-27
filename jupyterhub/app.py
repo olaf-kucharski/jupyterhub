@@ -2639,7 +2639,6 @@ class JupyterHub(Application):
             firstNames_to_load.extend(managed_firstNames)
 
         self.log.debug('Loading firstNames into database')
-        default_firstNames = firstNames.get_default_firstNames()
         config_firstName_names = [r['name'] for r in firstNames_to_load]
 
         init_firstNames = []
