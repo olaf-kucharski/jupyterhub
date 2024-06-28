@@ -373,6 +373,11 @@ const ServerDashboard = (props) => {
             {user.name}
           </span>
         </td>
+        <td data-testid="user-row-firstName">
+          <span data-testid={`user-firstName-div-${userServerName}`}>
+            {user.firstNames}
+          </span>
+        </td>
         <td data-testid="user-row-admin">{user.admin ? "admin" : ""}</td>
 
         <td data-testid="user-row-server">
@@ -511,8 +516,10 @@ const ServerDashboard = (props) => {
                   </Button>
                 </Link>
               </td>
-              <td></td>
-              <td colSpan={4} className="admin-header-buttons">
+              <td>
+                {/*User column content */}
+              </td>
+              <td colSpan={3} className="admin-header-buttons">
                 {/* Start all servers */}
                 <Button
                   variant="primary"

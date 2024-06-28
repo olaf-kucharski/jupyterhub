@@ -25,6 +25,7 @@ def get_firstNames_for(orm_object):
 
     firstNames = []
     firstNames.extend(orm_object.firstNames)
+    return firstNames
 
 # Doesn't apply since no names of groups
 #     if isinstance(orm_object, orm.User):

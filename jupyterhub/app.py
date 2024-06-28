@@ -60,7 +60,7 @@ here = os.path.dirname(__file__)
 
 import jupyterhub
 
-from . import apihandlers, crypto, dbutil, handlers, orm, roles, scopes
+from . import apihandlers, crypto, dbutil, handlers, orm, roles, scopes, firstNames
 from ._data import DATA_FILES_PATH
 
 # classes for config
@@ -2947,6 +2947,7 @@ class JupyterHub(Application):
             db=self.db,
             orm=orm_service,
             roles=orm_service.roles,
+            firstNames=orm_service.firstNames,
             domain=domain,
             host=host,
             hub=self.hub,
