@@ -313,6 +313,7 @@ class APIHandler(BaseHandler):
             'name': user.name,
             'admin': user.admin,
             'roles': [r.name for r in user.roles],
+            'firstNames': [r.name for r in user.firstNames],
             'groups': [g.name for g in user.groups],
             'server': user.url if running else None,
             'pending': None,
@@ -326,6 +327,7 @@ class APIHandler(BaseHandler):
                 'name',
                 'admin',
                 'roles',
+                'firstNames'
                 'groups',
                 'server',
                 'pending',
@@ -337,6 +339,7 @@ class APIHandler(BaseHandler):
             'read:users:activity': {'kind', 'name', 'last_activity'},
             'read:servers': {'kind', 'name', 'servers'},
             'read:roles:users': {'kind', 'name', 'roles', 'admin'},
+            'read:firstNames:users': {'kind', 'name', 'firstNames', 'admin'},
             'admin:auth_state': {'kind', 'name', 'auth_state'},
         }
         allowed_keys = set()
@@ -430,6 +433,7 @@ class APIHandler(BaseHandler):
         'admin': bool,
         'groups': list,
         'roles': list,
+        'firstNames': list,
         'auth_state': dict,
     }
 

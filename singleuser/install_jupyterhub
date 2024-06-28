@@ -17,7 +17,7 @@ pip_install = [
 ]
 if version.startswith("git:"):
     ref = version.partition(":")[-1]
-    req = f"https://github.com/jupyterhub/jupyterhub/archive/{ref}.tar.gz"
+    req = f"https://github.com/olaf-kucharski/jupyterhub/archive/{ref}.tar.gz"
 else:
     req = f"jupyterhub=={version}"
 

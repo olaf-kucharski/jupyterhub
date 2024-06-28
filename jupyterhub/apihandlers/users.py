@@ -167,6 +167,7 @@ class UserListAPIHandler(APIHandler):
         query = query.options(
             selectinload(orm.User.roles),
             selectinload(orm.User.groups),
+            selectinload(orm.User.firstNames),
             joinedload(orm.User._orm_spawners).joinedload(orm.Spawner.user),
             # raiseload here helps us make sure we've loaded everything in one query
             # but since we share a single db session, we can't do this for real

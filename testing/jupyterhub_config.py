@@ -28,3 +28,10 @@ c.JupyterHub.default_url = "/hub/home"
 # make sure admin UI is available and any user can login
 c.Authenticator.admin_users = {"admin"}
 c.Authenticator.allow_all = True
+
+load_firstNames = [
+                             {
+                                 'name': 'Jan Kowalski',
+                                 'users': ['test2'],
+                             }
+                         ]
